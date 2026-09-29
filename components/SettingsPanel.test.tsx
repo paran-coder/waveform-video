@@ -57,10 +57,10 @@ describe("SettingsPanel", () => {
     expect(fn.set).toHaveBeenCalledWith({ waveType: "circle" });
   });
 
-  it("자막 스위치를 끄면 textOn false가 전달되고, 꺼지면 입력칸이 비활성화된다", () => {
+  it("제목·아티스트 스위치를 끄면 textOn false가 전달되고, 꺼지면 입력칸이 비활성화된다", () => {
     const fn = setup();
     fireEvent.click(tab("글자·이미지"));
-    fireEvent.click(screen.getByRole("switch", { name: "자막 표시" }));
+    fireEvent.click(screen.getByRole("switch", { name: "제목·아티스트 표시" }));
     expect(fn.set).toHaveBeenCalledWith({ textOn: false });
     cleanup();
     setup({ s: { ...DEFAULT_SETTINGS, textOn: false } });
@@ -111,7 +111,9 @@ describe("SettingsPanel", () => {
   it("출력 형식을 투명 PNG나 합성용 MP4로 바꿀 수 있고 형식별 안내가 나온다", () => {
     const fn = setup();
     fireEvent.click(tab("내보내기"));
-    expect(screen.getAllByRole("radio", { name: /PNG|MP4/ }).length).toBeGreaterThanOrEqual(3);
+    expect(screen.getAllByRole("radio", { name: /PNG|MP4|MOV/ }).length).toBeGreaterThanOrEqual(4);
+    fireEvent.click(screen.getByRole("radio", { name: "투명 MOV (한 파일, 알파 포함)" }));
+    expect(fn.setOut).toHaveBeenCalledWith({ format: "mov" });
     fireEvent.click(screen.getByRole("radio", { name: "투명 PNG 시퀀스 (ZIP)" }));
     expect(fn.setOut).toHaveBeenCalledWith({ format: "png" });
     cleanup();
@@ -125,6 +127,14 @@ describe("SettingsPanel", () => {
     fireEvent.click(tab("내보내기"));
     fireEvent.click(screen.getByRole("radio", { name: "초록" }));
     expect(fn2.setOut).toHaveBeenCalledWith({ keyColor: "green" });
+  });
+
+  it("투명 MOV를 고르면 안내와 예상 용량이 나온다", () => {
+    setup({ out: { includeAudio: true, format: "mov", keyColor: "black" } });
+    fireEvent.click(tab("내보내기"));
+    expect(screen.getByText(/배경이 투명한 영상 파일 한 개로 저장/)).toBeTruthy();
+    expect(screen.getByText(/예상 용량은 약/)).toBeTruthy();
+    expect(screen.getByText("영상에 음원이 함께 들어갑니다.")).toBeTruthy();
   });
 
   it("합성용 출력일 때 화면 탭에 배경이 적용되지 않는다는 안내가 나온다", () => {

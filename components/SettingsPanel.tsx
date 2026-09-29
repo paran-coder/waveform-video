@@ -5,6 +5,7 @@ import { makeDemoFrame } from "@/lib/audio";
 import { renderFrame } from "@/lib/render";
 import {
   BUILTIN_PRESETS,
+  estimateFrameKB,
   getSize,
   mergeSettings,
   type Aspect,
@@ -296,8 +297,8 @@ export default function SettingsPanel(p: Props) {
 
   const text: ReactNode = (
     <>
-      <Group title="자막" hint="영상에 넣을 제목과 아티스트 글자입니다.">
-        <Switch label="자막 표시" checked={s.textOn} onChange={(v) => set({ textOn: v })} />
+      <Group title="제목·아티스트" hint="곡 제목과 아티스트 이름을 화면에 글자로 보여 줍니다.">
+        <Switch label="제목·아티스트 표시" checked={s.textOn} onChange={(v) => set({ textOn: v })} />
         <TwoCol>
           <TextField label="제목" value={s.title} placeholder="곡 제목" disabled={!s.textOn} onChange={(v) => set({ title: v })} />
           <TextField label="아티스트" value={s.artist} placeholder="아티스트 이름" disabled={!s.textOn} onChange={(v) => set({ artist: v })} />
@@ -357,7 +358,7 @@ export default function SettingsPanel(p: Props) {
   const userPresets = Object.entries(p.presets);
   const preset: ReactNode = (
     <>
-      <Group title="기본 프리셋" hint="누르면 바로 적용됩니다. 제목, 아티스트, 자막 표시, 로고는 그대로 유지돼요.">
+      <Group title="기본 프리셋" hint="누르면 바로 적용됩니다. 제목·아티스트와 로고는 그대로 유지돼요.">
         <div className="grid grid-cols-2 gap-3">
           {BUILTIN_PRESETS.map((b) => (
             <PresetThumb key={b.name} name={b.name} settings={mergeSettings(b.patch)} onApply={() => p.onLoadPreset(b.patch)} />
@@ -400,6 +401,11 @@ export default function SettingsPanel(p: Props) {
   );
 
   const frames = Math.round(p.outDuration * s.fps);
+  const isAlphaOut = p.out.format === "mov" || p.out.format === "png";
+  const estMB =
+    dur && isAlphaOut
+      ? (frames * estimateFrameKB(s)) / 1024 + (p.out.includeAudio ? (p.outDuration * 48000 * 4) / 1e6 : 0)
+      : null;
   const exportTab: ReactNode = (
     <>
       <Group title="출력 형식">
@@ -410,10 +416,17 @@ export default function SettingsPanel(p: Props) {
           onChange={(v) => p.setOut({ format: v })}
           options={[
             { value: "mp4", label: "일반 MP4 (배경 포함)" },
-            { value: "key", label: "합성용 MP4 (단색 배경)" },
+            { value: "mov", label: "투명 MOV (한 파일, 알파 포함)" },
             { value: "png", label: "투명 PNG 시퀀스 (ZIP)" },
+            { value: "key", label: "합성용 MP4 (단색 배경)" },
           ]}
         />
+        {p.out.format === "mov" && (
+          <Notice tone="info">
+            배경이 투명한 영상 파일 한 개로 저장되고 소리도 함께 들어갑니다. PNG 코덱을 쓴 MOV라서 프리미어 프로, 애프터 이펙트, 파이널 컷 프로 같은 전문 편집 프로그램에서 읽는 형식이에요.
+            프로그램이나 버전에 따라 열리지 않을 수 있으니, 그럴 땐 PNG 시퀀스나 합성용 MP4를 쓰세요. 무손실이라 용량이 큰 편이니 필요한 구간만 내보내는 걸 추천해요.
+          </Notice>
+        )}
         {p.out.format === "mp4" && <Notice tone="info">배경이 들어간 일반 영상입니다. 어디서든 재생됩니다.</Notice>}
         {p.out.format === "key" && (
           <>
@@ -478,6 +491,11 @@ export default function SettingsPanel(p: Props) {
         <p className="rounded-lg bg-surface-2 px-4 py-3 text-[15px] tabular-nums text-ink-2">
           {ow}×{oh} · {s.fps}fps · {dur ? `${mmss(p.outDuration)} · ${frames.toLocaleString()}프레임` : "음원을 올리면 길이가 표시됩니다"}
         </p>
+        {estMB !== null && (
+          <p className="text-sm leading-relaxed text-ink-2">
+            예상 용량은 약 {estMB >= 1024 ? `${(estMB / 1024).toFixed(1)}GB` : `${Math.round(estMB)}MB`}입니다. 파형 모양에 따라 달라지는 대략적인 값이에요. 1.5GB를 넘으면 내보내기가 중단됩니다.
+          </p>
+        )}
         {p.supportMsg && <Notice tone="warn">{p.supportMsg}</Notice>}
         <p className="text-sm leading-relaxed text-ink-2">
           내보내는 동안 이 탭을 켜 두세요. 백그라운드로 보내면 느려질 수 있습니다. 파일은 서버로 전송되지 않고 이 기기에서만 처리됩니다.
@@ -511,7 +529,7 @@ export default function SettingsPanel(p: Props) {
           );
         })}
       </div>
-      <div id={`panel-${tab}`} role="tabpanel" aria-labelledby={`tab-${tab}`} className="space-y-6 overflow-y-auto p-4 sm:p-5">
+      <div id={`panel-${tab}`} role="tabpanel" aria-labelledby={`tab-${tab}`} className="space-y-6 overflow-y-auto overscroll-contain p-4 sm:p-5">
         {content[tab]}
       </div>
     </aside>

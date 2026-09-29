@@ -177,7 +177,7 @@ function UploadIcon() {
 export function FileRow(props: { label: string; accept: string; fileName?: string | null; onFile: (f: File) => void }) {
   return (
     <div className="flex items-center gap-3">
-      <label className="inline-flex min-h-11 shrink-0 cursor-pointer items-center gap-2 rounded-lg bg-surface-2 px-4 text-[15px] font-medium text-ink ring-1 ring-line transition-colors duration-200 hover:bg-[#283040] focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-accent">
+      <label className="relative inline-flex min-h-11 shrink-0 cursor-pointer items-center gap-2 rounded-lg bg-surface-2 px-4 text-[15px] font-medium text-ink ring-1 ring-line transition-colors duration-200 hover:bg-[#283040] focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-accent">
         <UploadIcon />
         {props.label}
         <input
@@ -188,6 +188,7 @@ export function FileRow(props: { label: string; accept: string; fileName?: strin
             const f = e.target.files?.[0];
             if (f) props.onFile(f);
             e.target.value = "";
+            e.target.blur(); // 선택 뒤 포커스가 남아 화면이 움직이지 않게 한다.
           }}
         />
       </label>

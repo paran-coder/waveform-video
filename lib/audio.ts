@@ -75,7 +75,13 @@ export class FFT {
 }
 
 export async function decodeAudio(file: File): Promise<AudioBuffer> {
-  const ctx = new AudioContext();
+  // 48kHz로 디코딩하면 MP4(AAC)와 MOV(PCM) 모두 규격에 맞고, 기기 출력 설정과 상관없이 결과가 같다.
+  let ctx: AudioContext;
+  try {
+    ctx = new AudioContext({ sampleRate: 48000 });
+  } catch {
+    ctx = new AudioContext();
+  }
   try {
     return await ctx.decodeAudioData(await file.arrayBuffer());
   } finally {

@@ -75,12 +75,19 @@ export interface Settings {
 }
 
 // 프리셋에 넣지 않는 출력 옵션
-export type OutputFormat = "mp4" | "key" | "png";
+export type OutputFormat = "mp4" | "key" | "png" | "mov";
 
 export interface OutputOptions {
   includeAudio: boolean;
-  format: OutputFormat; // mp4는 일반 영상, key는 단색 배경 합성용 MP4, png는 투명 PNG 시퀀스
+  format: OutputFormat; // mp4는 일반 영상, key는 단색 배경 합성용 MP4, png는 투명 PNG 시퀀스, mov는 투명 MOV 한 파일
   keyColor: "black" | "green";
+}
+
+// 투명 PNG/MOV의 프레임당 용량(KB) 추정. 720p 16:9 기준 측정값(빛 번짐 있음 72KB, 없음 31KB)에서 화소 수의 0.65제곱으로 늘린다.
+export function estimateFrameKB(s: Pick<Settings, "aspect" | "resolution" | "glow">): number {
+  const [w, h] = getSize(s.aspect, s.resolution);
+  const base = s.glow > 0 ? 72 : 31;
+  return base * Math.pow((w * h) / 921600, 0.65);
 }
 
 export const KEY_COLORS = { black: "#000000", green: "#00ff00" } as const;

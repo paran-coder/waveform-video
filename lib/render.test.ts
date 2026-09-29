@@ -4,7 +4,7 @@ import { createCanvas } from "@napi-rs/canvas";
 import { describe, expect, it } from "vitest";
 import { Analyzer } from "./audio";
 import { renderFrame, setScratchFactory } from "./render";
-import { BUILTIN_PRESETS, getSize, mergeSettings, type WaveType } from "./settings";
+import { BUILTIN_PRESETS, estimateFrameKB, getSize, mergeSettings, type WaveType } from "./settings";
 
 setScratchFactory((w, h) => {
   const c = createCanvas(w, h);
@@ -70,7 +70,7 @@ describe("renderFrame", () => {
     expect(new Set(names).size).toBe(names.length);
   });
 
-  it("자막을 끄면 제목과 아티스트가 그려지지 않는다", () => {
+  it("제목·아티스트 표시를 끄면 글자가 그려지지 않는다", () => {
     const on = render("text-on", { width: 0, height: 0, glow: 0, title: "Sample Song", artist: "Artist", progressOn: false });
     const off = render("text-off", { width: 0, height: 0, glow: 0, title: "Sample Song", artist: "Artist", textOn: false, progressOn: false });
     const count = (d: Uint8ClampedArray) => {
@@ -148,6 +148,15 @@ describe("renderFrame", () => {
     renderFrame(ctx, w, h, s, {}, analyzer.getFrame(1, { bands: 48, smoothing: 0 }), 1, 6, 1, { solidBg: "#00ff00" });
     expect(Array.from(ctx.getImageData(10, 10, 1, 1).data)).toEqual([0, 255, 0, 255]);
     expect(Array.from(ctx.getImageData(w - 10, h - 10, 1, 1).data)).toEqual([0, 255, 0, 255]);
+  });
+
+  it("프레임당 용량 추정이 측정값(720p 72KB, 1080p 123KB)과 비슷하다", () => {
+    const kb = (resolution: 720 | 1080, glow: number) => estimateFrameKB({ aspect: "16:9", resolution, glow });
+    expect(kb(720, 0.4)).toBeCloseTo(72, 0);
+    expect(kb(1080, 0.4)).toBeGreaterThan(115);
+    expect(kb(1080, 0.4)).toBeLessThan(130);
+    expect(kb(720, 0)).toBeCloseTo(31, 0);
+    expect(kb(720, 0.4)).toBeGreaterThan(estimateFrameKB({ aspect: "1:1", resolution: 720, glow: 0.4 }));
   });
 
   it("페이드가 0이면 화면이 검정이다", () => {

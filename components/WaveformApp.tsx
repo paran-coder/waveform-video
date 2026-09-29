@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { Analyzer, decodeAudio, makeDemoFrame } from "@/lib/audio";
 import { loadImage, loadVideo } from "@/lib/assets";
 import { checkSupport, exportMp4 } from "@/lib/export";
+import { exportMov } from "@/lib/exportMov";
 import { exportPngSequence } from "@/lib/exportPng";
 import { Player } from "@/lib/player";
 import { renderFrame, type Assets, type RenderOpts } from "@/lib/render";
@@ -109,7 +110,7 @@ export default function WaveformApp() {
 
   // 출력 형식에 따라 배경을 투명 또는 단색으로 그린다. 미리보기도 같은 모습으로 보여 준다.
   const renderOpts = useMemo<RenderOpts>(
-    () => (out.format === "png" ? { transparent: true } : out.format === "key" ? { solidBg: KEY_COLORS[out.keyColor] } : {}),
+    () => (out.format === "png" || out.format === "mov" ? { transparent: true } : out.format === "key" ? { solidBg: KEY_COLORS[out.keyColor] } : {}),
     [out.format, out.keyColor],
   );
 
@@ -226,7 +227,7 @@ export default function WaveformApp() {
         assetsRef.current.bgVideo = await loadVideo(file);
         set({ bgKind: "video" });
       } else {
-        const img = await loadImage(file);
+        const img = await loadImage(file, kind === "bgImage" ? 1920 : 1024);
         if (kind === "bgImage") {
           assetsRef.current.bgImage = img;
           set({ bgKind: "image" });
@@ -274,7 +275,7 @@ export default function WaveformApp() {
 
   async function onExport() {
     if (!audio) return;
-    if (out.format !== "png") {
+    if (out.format === "mp4" || out.format === "key") {
       const msg = checkSupport();
       if (msg) {
         setError(msg);
@@ -303,6 +304,8 @@ export default function WaveformApp() {
       const base = (settings.title || audio.name || "waveform").replace(/[\\/:*?"<>|]/g, "_");
       if (out.format === "png") {
         download(await exportPngSequence(common), `${base}_png.zip`);
+      } else if (out.format === "mov") {
+        download(await exportMov(common), `${base}_transparent.mov`);
       } else {
         const blob = await exportMp4({ ...common, render: renderOpts });
         download(blob, out.format === "key" ? `${base}_${out.keyColor === "green" ? "green" : "black"}.mp4` : `${base}.mp4`);
@@ -327,7 +330,7 @@ export default function WaveformApp() {
     }
   };
 
-  // 프리셋은 파형의 스타일만 바꾼다. 내용에 해당하는 제목, 아티스트, 자막 표시, 로고는 유지한다.
+  // 프리셋은 파형의 스타일만 바꾼다. 내용에 해당하는 제목, 아티스트, 그 표시 여부, 로고는 유지한다.
   const loadPreset = (p: Partial<Settings>) =>
     setSettings((cur) => ({ ...mergeSettings(p), title: cur.title, artist: cur.artist, textOn: cur.textOn, logo: cur.logo }));
 
@@ -342,21 +345,28 @@ export default function WaveformApp() {
   }
 
   const [pw, ph] = previewSize(settings);
+  const transparentOut = out.format === "png" || out.format === "mov";
   const exportLabel =
-    (out.format === "png" ? "투명 PNG 시퀀스로 내보내기" : out.format === "key" ? "합성용 MP4로 내보내기" : "MP4로 내보내기") +
+    (out.format === "png"
+      ? "투명 PNG 시퀀스로 내보내기"
+      : out.format === "mov"
+        ? "투명 MOV로 내보내기"
+        : out.format === "key"
+          ? "합성용 MP4로 내보내기"
+          : "MP4로 내보내기") +
     (out.includeAudio ? "" : " (소리 없음)");
 
   return (
     <div className="mx-auto min-h-dvh max-w-[1400px] px-3 pb-16 lg:grid lg:grid-cols-[minmax(0,1fr)_520px] lg:items-start lg:gap-6 lg:px-6 lg:py-6">
-      <div className="contents lg:sticky lg:top-6 lg:block lg:self-start">
+      <div className="contents lg:sticky lg:top-6 lg:block lg:max-h-[calc(100dvh-3rem)] lg:self-start lg:overflow-y-auto lg:overscroll-contain">
         <div className="sticky top-0 z-20 -mx-3 bg-canvas/95 px-3 pb-2 pt-3 backdrop-blur lg:static lg:mx-0 lg:bg-transparent lg:p-0 lg:backdrop-blur-none">
           <canvas
             ref={canvasRef}
             width={pw}
             height={ph}
             aria-label="파형 미리보기"
-            style={out.format === "png" ? { background: "conic-gradient(#3a4150 25%, #262c38 0 50%, #3a4150 0 75%, #262c38 0) 0 0 / 24px 24px" } : undefined}
-            className={`mx-auto block h-auto max-h-[34vh] w-auto max-w-full rounded-xl ring-1 ring-line lg:max-h-[62vh] ${out.format === "png" ? "" : "bg-black"}`}
+            style={transparentOut ? { background: "conic-gradient(#3a4150 25%, #262c38 0 50%, #3a4150 0 75%, #262c38 0) 0 0 / 24px 24px" } : undefined}
+            className={`mx-auto block h-auto max-h-[34vh] w-auto max-w-full rounded-xl ring-1 ring-line lg:max-h-[max(12rem,calc(100dvh-17rem))] ${transparentOut ? "" : "bg-black"}`}
           />
           <div className="mt-3 flex items-center gap-3">
             <button
@@ -434,13 +444,13 @@ export default function WaveformApp() {
         }}
         onExportJson={() => download(new Blob([JSON.stringify(settings, null, 2)], { type: "application/json" }), "waveform-settings.json")}
         onImportJson={importJson}
-        supportMsg={out.format === "png" ? null : supportMsg}
+        supportMsg={out.format === "mp4" || out.format === "key" ? supportMsg : null}
       />
 
       {exp && (
         <div role="dialog" aria-modal="true" aria-label="내보내기 진행 상황" className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-6">
           <div className="w-full max-w-sm space-y-4 rounded-2xl bg-surface p-6 ring-1 ring-line">
-            <p className="text-lg font-semibold">{out.format === "png" ? "PNG 시퀀스를 만들고 있습니다." : "MP4를 만들고 있습니다."}</p>
+            <p className="text-lg font-semibold">{out.format === "png" ? "PNG 시퀀스를 만들고 있습니다." : out.format === "mov" ? "투명 MOV를 만들고 있습니다." : "MP4를 만들고 있습니다."}</p>
             <div className="h-2.5 overflow-hidden rounded-full bg-[#414a5c]">
               <div className="h-full bg-accent transition-[width] duration-200" style={{ width: `${Math.round(exp.p * 100)}%` }} />
             </div>
