@@ -4,19 +4,23 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { Analyzer, decodeAudio, makeDemoFrame } from "@/lib/audio";
 import { loadImage, loadVideo } from "@/lib/assets";
 import { checkSupport, exportMp4 } from "@/lib/export";
+import { exportPngSequence } from "@/lib/exportPng";
 import { Player } from "@/lib/player";
-import { renderFrame, type Assets } from "@/lib/render";
+import { renderFrame, type Assets, type RenderOpts } from "@/lib/render";
 import {
   DEFAULT_SETTINGS,
+  KEY_COLORS,
   fadeGain,
   getSize,
   mergeSettings,
   type ImageLayer,
+  type LogoLayer,
+  type OutputOptions,
   type Settings,
   type Timeline,
 } from "@/lib/settings";
 import SettingsPanel, { type AssetKind } from "./SettingsPanel";
-import { Button, FileButton } from "./ui";
+import { Button, FileRow, Notice } from "./ui";
 
 interface LoadedAudio {
   name: string;
@@ -77,6 +81,8 @@ export default function WaveformApp() {
   const [audio, setAudio] = useState<LoadedAudio | null>(null);
   const [tl, setTl] = useState<Timeline>({ start: 0, end: 0, fadeIn: 0, fadeOut: 0 });
   const [assetVer, setAssetVer] = useState(0);
+  const [assetNames, setAssetNames] = useState<Partial<Record<AssetKind, string>>>({});
+  const [out, setOutState] = useState<OutputOptions>({ includeAudio: true, format: "mp4", keyColor: "black" });
   const [playing, setPlaying] = useState(false);
   const [time, setTime] = useState(0);
   const [busy, setBusy] = useState<string | null>(null);
@@ -101,6 +107,12 @@ export default function WaveformApp() {
 
   const outDur = audio ? Math.max(0, tl.end - tl.start) : 0;
 
+  // 출력 형식에 따라 배경을 투명 또는 단색으로 그린다. 미리보기도 같은 모습으로 보여 준다.
+  const renderOpts = useMemo<RenderOpts>(
+    () => (out.format === "png" ? { transparent: true } : out.format === "key" ? { solidBg: KEY_COLORS[out.keyColor] } : {}),
+    [out.format, out.keyColor],
+  );
+
   const draw = useCallback(
     (t: number) => {
       const c = canvasRef.current;
@@ -115,16 +127,32 @@ export default function WaveformApp() {
       if (audio) {
         const dur = tl.end - tl.start;
         const frame = audio.analyzer.getFrame(tl.start + t, { bands: settings.barCount, smoothing: settings.smoothing });
-        renderFrame(ctx, w, h, settings, assetsRef.current, frame, t, dur, fadeGain(t, dur, tl.fadeIn, tl.fadeOut));
+        renderFrame(ctx, w, h, settings, assetsRef.current, frame, t, dur, fadeGain(t, dur, tl.fadeIn, tl.fadeOut), renderOpts);
       } else {
         const frame = makeDemoFrame(DEMO_TIME, settings.barCount);
-        renderFrame(ctx, w, h, settings, assetsRef.current, frame, DEMO_TIME, 10, 1);
+        renderFrame(ctx, w, h, settings, assetsRef.current, frame, DEMO_TIME, 10, 1, renderOpts);
       }
     },
     // assetVer는 이미지나 영상이 바뀌었을 때 다시 그리기 위한 신호
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [settings, audio, tl, assetVer],
+    [settings, audio, tl, assetVer, renderOpts],
   );
+
+  // 웹폰트가 늦게 도착해도 캔버스 글자가 바뀌도록 폰트 로딩이 끝나면 다시 그린다.
+  const drawRef = useRef(draw);
+  useEffect(() => {
+    drawRef.current = draw;
+  });
+  useEffect(() => {
+    const fonts = document.fonts;
+    if (!fonts) return;
+    const on = () => drawRef.current(playerRef.current?.getTime() ?? 0);
+    fonts.addEventListener("loadingdone", on);
+    return () => fonts.removeEventListener("loadingdone", on);
+  }, []);
+  useEffect(() => {
+    void document.fonts?.load("700 32px 'Pretendard Variable'", settings.title + settings.artist).catch(() => {});
+  }, [settings.title, settings.artist]);
 
   // 정지 상태에서는 값이 바뀔 때만, 재생 중에는 매 프레임 그린다.
   useEffect(() => {
@@ -156,8 +184,9 @@ export default function WaveformApp() {
   }, [playing, draw]);
 
   const set = (patch: Partial<Settings>) => setSettings((s) => ({ ...s, ...patch }));
-  const setLayer = (k: "art" | "logo", patch: Partial<ImageLayer>) =>
-    setSettings((s) => ({ ...s, [k]: { ...s[k], ...patch } }));
+  const setArt = (patch: Partial<ImageLayer>) => setSettings((s) => ({ ...s, art: { ...s.art, ...patch } }));
+  const setLogo = (patch: Partial<LogoLayer>) => setSettings((s) => ({ ...s, logo: { ...s.logo, ...patch } }));
+  const setOut = (patch: Partial<OutputOptions>) => setOutState((o) => ({ ...o, ...patch }));
 
   const applyTimeline = (buffer: AudioBuffer, next: Timeline) => {
     setTl(next);
@@ -203,9 +232,11 @@ export default function WaveformApp() {
           set({ bgKind: "image" });
         } else {
           assetsRef.current[kind] = img;
-          setLayer(kind, { enabled: true });
+          if (kind === "art") setArt({ enabled: true });
+          else setLogo({ enabled: true });
         }
       }
+      setAssetNames((n) => ({ ...n, [kind]: file.name }));
       setAssetVer((v) => v + 1);
     } catch (e) {
       setError(e instanceof Error ? e.message : "파일을 읽을 수 없습니다.");
@@ -243,10 +274,12 @@ export default function WaveformApp() {
 
   async function onExport() {
     if (!audio) return;
-    const msg = checkSupport();
-    if (msg) {
-      setError(msg);
-      return;
+    if (out.format !== "png") {
+      const msg = checkSupport();
+      if (msg) {
+        setError(msg);
+        return;
+      }
     }
     setError(null);
     playerRef.current?.pause();
@@ -256,17 +289,24 @@ export default function WaveformApp() {
     abortRef.current = ac;
     setExp({ p: 0, label: "준비하는 중" });
     try {
-      const blob = await exportMp4({
+      await document.fonts?.load("700 32px 'Pretendard Variable'", settings.title + settings.artist).catch(() => {});
+      const common = {
         buffer: audio.buffer,
         analyzer: audio.analyzer,
         settings,
         timeline: tl,
         assets: assetsRef.current,
+        includeAudio: out.includeAudio,
         signal: ac.signal,
-        onProgress: (p, label) => setExp({ p, label }),
-      });
+        onProgress: (p: number, label: string) => setExp({ p, label }),
+      };
       const base = (settings.title || audio.name || "waveform").replace(/[\\/:*?"<>|]/g, "_");
-      download(blob, `${base}.mp4`);
+      if (out.format === "png") {
+        download(await exportPngSequence(common), `${base}_png.zip`);
+      } else {
+        const blob = await exportMp4({ ...common, render: renderOpts });
+        download(blob, out.format === "key" ? `${base}_${out.keyColor === "green" ? "green" : "black"}.mp4` : `${base}.mp4`);
+      }
     } catch (e) {
       if (!(e instanceof DOMException && e.name === "AbortError")) {
         setError(e instanceof Error ? e.message : "내보내기에 실패했습니다.");
@@ -287,8 +327,9 @@ export default function WaveformApp() {
     }
   };
 
+  // 프리셋은 파형의 스타일만 바꾼다. 내용에 해당하는 제목, 아티스트, 자막 표시, 로고는 유지한다.
   const loadPreset = (p: Partial<Settings>) =>
-    setSettings((cur) => ({ ...mergeSettings(p), title: cur.title, artist: cur.artist }));
+    setSettings((cur) => ({ ...mergeSettings(p), title: cur.title, artist: cur.artist, textOn: cur.textOn, logo: cur.logo }));
 
   async function importJson(file: File) {
     try {
@@ -301,74 +342,88 @@ export default function WaveformApp() {
   }
 
   const [pw, ph] = previewSize(settings);
+  const exportLabel =
+    (out.format === "png" ? "투명 PNG 시퀀스로 내보내기" : out.format === "key" ? "합성용 MP4로 내보내기" : "MP4로 내보내기") +
+    (out.includeAudio ? "" : " (소리 없음)");
 
   return (
-    <div className="mx-auto max-w-6xl px-3 pb-16 lg:grid lg:grid-cols-[minmax(0,1fr)_400px] lg:gap-6 lg:px-4">
-      <div className="contents lg:sticky lg:top-4 lg:block lg:self-start">
-        <div className="sticky top-0 z-20 -mx-3 bg-neutral-950/95 px-3 pb-2 pt-3 backdrop-blur lg:static lg:mx-0 lg:px-0">
-          <h1 className="mb-2 text-base font-bold lg:text-xl">파형 영상 만들기</h1>
+    <div className="mx-auto min-h-dvh max-w-[1400px] px-3 pb-16 lg:grid lg:grid-cols-[minmax(0,1fr)_520px] lg:items-start lg:gap-6 lg:px-6 lg:py-6">
+      <div className="contents lg:sticky lg:top-6 lg:block lg:self-start">
+        <div className="sticky top-0 z-20 -mx-3 bg-canvas/95 px-3 pb-2 pt-3 backdrop-blur lg:static lg:mx-0 lg:bg-transparent lg:p-0 lg:backdrop-blur-none">
           <canvas
             ref={canvasRef}
             width={pw}
             height={ph}
-            className="mx-auto block h-auto max-h-[36vh] w-auto max-w-full rounded-lg bg-black lg:max-h-[68vh]"
+            aria-label="파형 미리보기"
+            style={out.format === "png" ? { background: "conic-gradient(#3a4150 25%, #262c38 0 50%, #3a4150 0 75%, #262c38 0) 0 0 / 24px 24px" } : undefined}
+            className={`mx-auto block h-auto max-h-[34vh] w-auto max-w-full rounded-xl ring-1 ring-line lg:max-h-[62vh] ${out.format === "png" ? "" : "bg-black"}`}
           />
-          <div className="mt-2 flex items-center gap-3">
+          <div className="mt-3 flex items-center gap-3">
             <button
               type="button"
               onClick={togglePlay}
               disabled={!audio}
-              className="h-10 w-16 rounded-lg bg-cyan-400 text-sm font-semibold text-neutral-950 disabled:opacity-30"
+              aria-label={playing ? "정지" : "재생"}
+              className="flex h-12 w-12 shrink-0 cursor-pointer items-center justify-center rounded-full bg-accent text-accent-ink transition-transform duration-200 hover:bg-[#8cf0fb] active:scale-95 disabled:cursor-not-allowed disabled:opacity-30 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
             >
-              {playing ? "정지" : "재생"}
+              {playing ? (
+                <svg viewBox="0 0 24 24" className="h-6 w-6" fill="currentColor" aria-hidden>
+                  <rect x="6" y="5" width="4" height="14" rx="1" />
+                  <rect x="14" y="5" width="4" height="14" rx="1" />
+                </svg>
+              ) : (
+                <svg viewBox="0 0 24 24" className="h-6 w-6" fill="currentColor" aria-hidden>
+                  <path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5Z" />
+                </svg>
+              )}
             </button>
             <input
               type="range"
+              className="wf-range"
+              aria-label="재생 위치"
               min={0}
               max={outDur || 1}
               step={0.01}
               value={Math.min(time, outDur || 1)}
               disabled={!audio}
+              style={{ "--p": `${outDur ? (Math.min(time, outDur) / outDur) * 100 : 0}%` } as React.CSSProperties}
               onChange={(e) => onSeek(Number(e.target.value))}
-              className="h-6 flex-1 accent-cyan-400 disabled:opacity-30"
             />
-            <span className="w-24 text-right text-xs tabular-nums text-neutral-400">
+            <span className="w-28 shrink-0 text-right text-[15px] tabular-nums text-ink-2">
               {mmss(time)} / {mmss(outDur)}
             </span>
           </div>
-          {!audio && <p className="mt-1 text-xs text-neutral-500">음원을 올리면 실제 파형이 표시됩니다. 지금은 예시 화면입니다.</p>}
+          {!audio && <p className="mt-1 text-sm text-ink-2">음원을 올리면 실제 파형이 표시됩니다. 지금은 예시 화면이에요.</p>}
         </div>
 
-        <div className="space-y-3 py-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <FileButton label={audio ? "음원 바꾸기" : "음원 파일 선택"} accept="audio/*" onFile={onAudioFile} />
-            {audio && <span className="min-w-0 flex-1 truncate text-xs text-neutral-400">{audio.name}</span>}
-          </div>
-          {busy && <p className="text-xs text-cyan-300">{busy}</p>}
-          {error && <p className="rounded-lg border border-red-400/30 bg-red-400/10 p-3 text-xs text-red-200">{error}</p>}
-          {supportMsg && <p className="rounded-lg border border-amber-400/30 bg-amber-400/10 p-3 text-xs text-amber-200">{supportMsg}</p>}
+        <div className="space-y-3 py-3 lg:pt-4">
+          <FileRow label={audio ? "음원 바꾸기" : "음원 파일 선택"} accept="audio/*" fileName={audio?.name} onFile={onAudioFile} />
+          {busy && <Notice tone="info">{busy}</Notice>}
+          {error && <Notice tone="error">{error}</Notice>}
           <button
             type="button"
             onClick={onExport}
             disabled={!audio || !!exp}
-            className="h-12 w-full rounded-xl bg-white text-sm font-bold text-neutral-950 disabled:opacity-30"
+            className="min-h-14 w-full cursor-pointer rounded-xl bg-white text-base font-bold text-slate-950 transition-colors duration-200 hover:bg-slate-200 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-30 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
           >
-            MP4로 내보내기
+            {exportLabel}
           </button>
-          <p className="text-[11px] leading-relaxed text-neutral-500">
-            내보내는 동안 이 탭을 켜 둬 주세요. 백그라운드로 보내면 느려질 수 있습니다. 파일은 서버로 전송되지 않고 이 기기에서만 처리됩니다.
-          </p>
         </div>
       </div>
 
       <SettingsPanel
         s={settings}
         set={set}
-        setLayer={setLayer}
+        setArt={setArt}
+        setLogo={setLogo}
         onAsset={onAsset}
+        assetNames={assetNames}
         audioDuration={audio ? audio.buffer.duration : null}
+        outDuration={outDur}
         tl={tl}
         setTl={updateTl}
+        out={out}
+        setOut={setOut}
         presets={presets}
         onSavePreset={(name) => savePresets({ ...presets, [name]: settings })}
         onLoadPreset={loadPreset}
@@ -379,16 +434,17 @@ export default function WaveformApp() {
         }}
         onExportJson={() => download(new Blob([JSON.stringify(settings, null, 2)], { type: "application/json" }), "waveform-settings.json")}
         onImportJson={importJson}
+        supportMsg={out.format === "png" ? null : supportMsg}
       />
 
       {exp && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-6">
-          <div className="w-full max-w-sm space-y-4 rounded-2xl border border-white/10 bg-neutral-900 p-5">
-            <p className="text-sm font-semibold">MP4를 만들고 있습니다.</p>
-            <div className="h-2 overflow-hidden rounded-full bg-white/10">
-              <div className="h-full bg-cyan-400 transition-[width]" style={{ width: `${Math.round(exp.p * 100)}%` }} />
+        <div role="dialog" aria-modal="true" aria-label="내보내기 진행 상황" className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-6">
+          <div className="w-full max-w-sm space-y-4 rounded-2xl bg-surface p-6 ring-1 ring-line">
+            <p className="text-lg font-semibold">{out.format === "png" ? "PNG 시퀀스를 만들고 있습니다." : "MP4를 만들고 있습니다."}</p>
+            <div className="h-2.5 overflow-hidden rounded-full bg-[#414a5c]">
+              <div className="h-full bg-accent transition-[width] duration-200" style={{ width: `${Math.round(exp.p * 100)}%` }} />
             </div>
-            <p className="text-xs text-neutral-400">
+            <p className="text-[15px] tabular-nums text-ink-2">
               {exp.label} · {Math.round(exp.p * 100)}%
             </p>
             <Button kind="danger" onClick={() => abortRef.current?.abort()}>

@@ -6,6 +6,7 @@ import { exportMp4 } from "./export";
 import { mergeSettings } from "./settings";
 
 type Chunk = { type: "key" | "delta"; timestamp: number; duration: number; byteLength: number; copyTo: (b: Uint8Array) => void };
+let lastFrameSrc: unknown = null;
 const videoChunks: Chunk[] = [];
 const audioBlocks: { timestamp: number; frames: number; first: number }[] = [];
 
@@ -30,7 +31,9 @@ beforeAll(() => {
     constructor(
       public src: unknown,
       public init: { timestamp: number; duration: number },
-    ) {}
+    ) {
+      lastFrameSrc = src;
+    }
     close() {}
   };
   g.AudioData = class {
@@ -122,6 +125,28 @@ describe("exportMp4", () => {
     await exportMp4({ ...base, settings: mergeSettings({ fps: 30 }), timeline: { start: 0, end: 2, fadeIn: 1, fadeOut: 0 } });
     expect(audioBlocks[0].first).toBeLessThan(0.001);
     expect(audioBlocks[1].frames).toBeGreaterThan(0);
+  });
+
+  it("음원을 빼면 오디오 트랙 없이 영상만 만든다", async () => {
+    videoChunks.length = 0;
+    audioBlocks.length = 0;
+    const blob = await exportMp4({ ...base, settings: mergeSettings({ fps: 30 }), timeline: { start: 0, end: 1, fadeIn: 0, fadeOut: 0 }, includeAudio: false });
+    expect(videoChunks.length).toBe(30);
+    expect(audioBlocks.length).toBe(0);
+    const text = new TextDecoder("latin1").decode(new Uint8Array(await blob.arrayBuffer()));
+    expect(text).toContain("avc1");
+    expect(text).not.toContain("mp4a");
+  });
+
+  it("합성용 단색 배경 옵션이 실제 프레임에 적용된다", async () => {
+    await exportMp4({
+      ...base,
+      settings: mergeSettings({ fps: 30, glow: 0, progressOn: false, width: 0, height: 0 }),
+      timeline: { start: 0, end: 0.5, fadeIn: 0, fadeOut: 0 },
+      render: { solidBg: "#00ff00" },
+    });
+    const c = lastFrameSrc as { getContext: (t: string) => CanvasRenderingContext2D };
+    expect(Array.from(c.getContext("2d").getImageData(10, 10, 1, 1).data)).toEqual([0, 255, 0, 255]);
   });
 
   it("취소하면 AbortError로 중단한다", async () => {

@@ -1,6 +1,6 @@
 // 설정과 오디오 프레임을 받아 캔버스에 한 프레임을 그리는 렌더러. 미리보기와 내보내기가 같은 함수를 쓴다.
 import type { AudioFrame } from "./audio";
-import { clamp, type ImageLayer, type Settings } from "./settings";
+import { clamp, type ImageLayer, type LogoLayer, type Settings } from "./settings";
 
 export interface Assets {
   bgImage?: CanvasImageSource;
@@ -13,7 +13,7 @@ type Ctx = CanvasRenderingContext2D;
 type Scratch = { canvas: CanvasImageSource; ctx: Ctx };
 
 const FONT =
-  '"Pretendard", "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", system-ui, sans-serif';
+  '"Pretendard Variable", "Pretendard", "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", system-ui, sans-serif';
 
 // 블러용 임시 캔버스 생성기. 테스트에서는 node 환경용 구현으로 교체한다.
 let makeScratch = (w: number, h: number): Scratch => {
@@ -137,6 +137,27 @@ function drawLayer(ctx: Ctx, img: CanvasImageSource, L: ImageLayer, w: number, h
   ctx.restore();
 }
 
+function drawLogo(ctx: Ctx, img: CanvasImageSource, L: LogoLayer, w: number, h: number) {
+  const [sw, sh] = srcSize(img);
+  if (!sw || !sh) return;
+  const m = Math.min(w, h);
+  const dw = L.size * m;
+  const dh = (dw * sh) / sw;
+  const mg = L.margin * m;
+  const side = L.anchor[1];
+  const x = side === "l" ? mg : side === "r" ? w - mg - dw : (w - dw) / 2;
+  const y = L.anchor[0] === "t" ? mg : h - mg - dh;
+  ctx.save();
+  ctx.globalAlpha = L.opacity;
+  if (L.radius > 0) {
+    ctx.beginPath();
+    roundRectPath(ctx, x, y, dw, dh, Math.min(dw, dh) * L.radius);
+    ctx.clip();
+  }
+  ctx.drawImage(img, x, y, dw, dh);
+  ctx.restore();
+}
+
 function drawWave(ctx: Ctx, w: number, h: number, s: Settings, f: AudioFrame, u: number) {
   const bw = s.width * w;
   const bh = s.height * h;
@@ -239,7 +260,7 @@ function drawWave(ctx: Ctx, w: number, h: number, s: Settings, f: AudioFrame, u:
 }
 
 function drawText(ctx: Ctx, w: number, h: number, s: Settings) {
-  if (!s.title && !s.artist) return;
+  if (!s.textOn || (!s.title && !s.artist)) return;
   const size = s.titleSize * Math.min(w, h);
   ctx.save();
   ctx.textAlign = "center";
@@ -261,6 +282,11 @@ function drawText(ctx: Ctx, w: number, h: number, s: Settings) {
   ctx.restore();
 }
 
+export interface RenderOpts {
+  transparent?: boolean; // 배경을 그리지 않고 투명하게 둔다
+  solidBg?: string; // 배경을 이 단색으로만 채운다 (합성용)
+}
+
 /**
  * @param t 출력 영상 기준 현재 시각(초)
  * @param outDur 출력 영상 길이(초)
@@ -276,17 +302,23 @@ export function renderFrame(
   t: number,
   outDur: number,
   fade = 1,
+  opts: RenderOpts = {},
 ): void {
   const u = Math.min(w, h) / 1080;
   ctx.clearRect(0, 0, w, h);
-  drawBackground(ctx, w, h, s, assets);
+  if (opts.solidBg) {
+    ctx.fillStyle = opts.solidBg;
+    ctx.fillRect(0, 0, w, h);
+  } else if (!opts.transparent) {
+    drawBackground(ctx, w, h, s, assets);
+  }
 
   if (s.art.enabled && assets.art) {
     drawLayer(ctx, assets.art, s.art, w, h, 1 + s.pulse * frame.bass * 0.08);
   }
   drawWave(ctx, w, h, s, frame, u);
   drawText(ctx, w, h, s);
-  if (s.logo.enabled && assets.logo) drawLayer(ctx, assets.logo, s.logo, w, h);
+  if (s.logo.enabled && assets.logo) drawLogo(ctx, assets.logo, s.logo, w, h);
 
   if (s.progressOn && outDur > 0) {
     const th = Math.max(2, s.progressThickness * u);
@@ -301,7 +333,16 @@ export function renderFrame(
   }
 
   if (fade < 1) {
-    ctx.fillStyle = `rgba(0,0,0,${1 - fade})`;
+    ctx.save();
+    if (opts.transparent) {
+      // 투명 출력은 검정으로 덮지 않고 알파값만 줄인다.
+      ctx.globalCompositeOperation = "destination-in";
+      ctx.fillStyle = `rgba(0,0,0,${fade})`;
+    } else {
+      ctx.globalAlpha = 1 - fade;
+      ctx.fillStyle = opts.solidBg ?? "#000000";
+    }
     ctx.fillRect(0, 0, w, h);
+    ctx.restore();
   }
 }

@@ -1,9 +1,81 @@
 @import "tailwindcss";
 
-body {
-  font-family: "Pretendard", "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", system-ui, sans-serif;
+/* 화면 전체에서 쓰는 색. 배경은 순수 검정 대신 살짝 푸른 어두운 색을 쓰고, 강조색은 하나만 쓴다. */
+@theme static {
+  --color-canvas: #0e1116;
+  --color-surface: #161a22;
+  --color-surface-2: #1f2531;
+  --color-line: #313848;
+  --color-ink: #eef0f5;
+  --color-ink-2: #b4bbca;
+  --color-accent: #67e8f9;
+  --color-accent-ink: #06222a;
+  --color-danger: #fca5a5;
 }
 
-summary::-webkit-details-marker {
-  display: none;
+body {
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: "Pretendard Variable", Pretendard, "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", system-ui, sans-serif;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/* 슬라이더. 터치하기 쉽도록 높이 44px, 채워진 구간을 강조색으로 보여 준다. */
+.wf-range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 44px;
+  background: transparent;
+  cursor: pointer;
+}
+.wf-range::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 9999px;
+  background: linear-gradient(to right, var(--color-accent) var(--p, 0%), #414a5c var(--p, 0%));
+}
+.wf-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 24px;
+  width: 24px;
+  margin-top: -9px;
+  border-radius: 9999px;
+  background: #fff;
+  border: 3px solid var(--color-accent);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+}
+.wf-range::-moz-range-track {
+  height: 6px;
+  border-radius: 9999px;
+  background: #414a5c;
+}
+.wf-range::-moz-range-progress {
+  height: 6px;
+  border-radius: 9999px;
+  background: var(--color-accent);
+}
+.wf-range::-moz-range-thumb {
+  height: 18px;
+  width: 18px;
+  border-radius: 9999px;
+  background: #fff;
+  border: 3px solid var(--color-accent);
+}
+.wf-range:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
 }

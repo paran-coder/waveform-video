@@ -2,7 +2,7 @@
 import { ArrayBufferTarget, Muxer } from "mp4-muxer";
 import type { Analyzer } from "./audio";
 import { seekVideo } from "./assets";
-import { renderFrame, type Assets } from "./render";
+import { renderFrame, type Assets, type RenderOpts } from "./render";
 import { fadeGain, getSize, type Settings, type Timeline } from "./settings";
 
 export interface ExportOptions {
@@ -11,6 +11,8 @@ export interface ExportOptions {
   settings: Settings;
   timeline: Timeline;
   assets: Assets;
+  includeAudio?: boolean; // 기본값은 true
+  render?: RenderOpts; // 합성용 단색 배경 등 렌더 옵션
   onProgress?: (p: number, label: string) => void;
   signal?: AbortSignal;
 }
@@ -34,6 +36,7 @@ function abortError(): DOMException {
 
 export async function exportMp4(o: ExportOptions): Promise<Blob> {
   const { buffer, analyzer, settings: s, timeline: tl, assets, onProgress, signal } = o;
+  const withAudio = o.includeAudio !== false;
   const [w, h] = getSize(s.aspect, s.resolution);
   const fps = s.fps;
   const outDur = tl.end - tl.start;
@@ -53,14 +56,16 @@ export async function exportMp4(o: ExportOptions): Promise<Blob> {
   if (!videoCodec) throw new Error("이 브라우저에서 H.264 영상 인코딩을 사용할 수 없습니다.");
 
   const audioConfig = { codec: "mp4a.40.2", sampleRate: sr, numberOfChannels: channels, bitrate: 192_000 };
-  const audioSupport = await AudioEncoder.isConfigSupported(audioConfig);
-  if (!audioSupport.supported) throw new Error("이 브라우저에서 AAC 오디오 인코딩을 사용할 수 없습니다.");
+  if (withAudio) {
+    const audioSupport = await AudioEncoder.isConfigSupported(audioConfig);
+    if (!audioSupport.supported) throw new Error("이 브라우저에서 AAC 오디오 인코딩을 사용할 수 없습니다.");
+  }
 
   const target = new ArrayBufferTarget();
   const muxer = new Muxer({
     target,
     video: { codec: "avc", width: w, height: h, frameRate: fps },
-    audio: { codec: "aac", numberOfChannels: channels, sampleRate: sr },
+    ...(withAudio ? { audio: { codec: "aac" as const, numberOfChannels: channels, sampleRate: sr } } : {}),
     fastStart: "in-memory",
   });
 
@@ -70,11 +75,13 @@ export async function exportMp4(o: ExportOptions): Promise<Blob> {
     error: (e) => (encError = e),
   });
   videoEncoder.configure({ codec: videoCodec, width: w, height: h, bitrate, framerate: fps, latencyMode: "quality" });
-  const audioEncoder = new AudioEncoder({
-    output: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
-    error: (e) => (encError = e),
-  });
-  audioEncoder.configure(audioConfig);
+  const audioEncoder = withAudio
+    ? new AudioEncoder({
+        output: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
+        error: (e) => (encError = e),
+      })
+    : null;
+  audioEncoder?.configure(audioConfig);
 
   const canvas = document.createElement("canvas");
   canvas.width = w;
@@ -87,6 +94,7 @@ export async function exportMp4(o: ExportOptions): Promise<Blob> {
   let audioDone = 0;
 
   const encodeAudioBlock = () => {
+    if (!audioEncoder) return;
     const n = Math.min(blockSamples, totalSamples - audioDone);
     const data = new Float32Array(n * channels);
     for (let c = 0; c < channels; c++) {
@@ -112,7 +120,7 @@ export async function exportMp4(o: ExportOptions): Promise<Blob> {
 
   const cleanup = () => {
     if (videoEncoder.state !== "closed") videoEncoder.close();
-    if (audioEncoder.state !== "closed") audioEncoder.close();
+    if (audioEncoder && audioEncoder.state !== "closed") audioEncoder.close();
   };
 
   try {
@@ -121,10 +129,10 @@ export async function exportMp4(o: ExportOptions): Promise<Blob> {
       if (signal?.aborted) throw abortError();
       if (encError) throw encError;
       const t = i / fps;
-      if (s.bgKind === "video" && assets.bgVideo) await seekVideo(assets.bgVideo, t);
+      if (s.bgKind === "video" && assets.bgVideo && !o.render?.solidBg) await seekVideo(assets.bgVideo, t);
 
       const frame = analyzer.getFrame(tl.start + t, { bands: s.barCount, smoothing: s.smoothing });
-      renderFrame(ctx, w, h, s, assets, frame, t, outDur, fadeGain(t, outDur, tl.fadeIn, tl.fadeOut));
+      renderFrame(ctx, w, h, s, assets, frame, t, outDur, fadeGain(t, outDur, tl.fadeIn, tl.fadeOut), o.render);
 
       const vf = new VideoFrame(canvas, {
         timestamp: Math.round((i * 1e6) / fps),
@@ -134,7 +142,7 @@ export async function exportMp4(o: ExportOptions): Promise<Blob> {
       vf.close();
 
       // 영상이 1초 앞서 나가지 않도록 오디오를 같은 속도로 넣어 두 트랙이 뒤섞여 저장되게 한다.
-      while (audioDone < totalSamples && audioDone / sr < t + 1) encodeAudioBlock();
+      while (withAudio && audioDone < totalSamples && audioDone / sr < t + 1) encodeAudioBlock();
 
       while (videoEncoder.encodeQueueSize > 8) await sleep(2);
       if (i % 8 === 0) {
@@ -142,11 +150,11 @@ export async function exportMp4(o: ExportOptions): Promise<Blob> {
         await sleep(0);
       }
     }
-    while (audioDone < totalSamples) encodeAudioBlock();
+    while (withAudio && audioDone < totalSamples) encodeAudioBlock();
 
     onProgress?.(0.98, "파일 마무리 중");
     await videoEncoder.flush();
-    await audioEncoder.flush();
+    await audioEncoder?.flush();
     if (encError) throw encError;
     muxer.finalize();
     onProgress?.(1, "완료");
