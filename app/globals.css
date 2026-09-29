@@ -1,0 +1,9 @@
+@import "tailwindcss";
+
+body {
+  font-family: "Pretendard", "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", system-ui, sans-serif;
+}
+
+summary::-webkit-details-marker {
+  display: none;
+}
